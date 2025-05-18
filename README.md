@@ -19,11 +19,15 @@ This is a simple Node.js Express app instrumented with OpenTelemetry and configu
    npm start
    ```
 
-Visit http://localhost:3000/ to test.
+To run in Docker:
+   ```sh
+   ./run.sh
+   ```
+
+Visit http://localhost:8080/rolldice to test or run ./rolldice_hit.sh to generate load.
 
 ## Endpoints
-- `/` – Hello World
-- `/ping` – Health check
+- `/rolldice` – Roll a dice
 
 ## Notes
 - Traces will be visible in your Grafana Cloud account under Tempo/Traces.
