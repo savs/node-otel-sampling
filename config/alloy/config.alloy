@@ -1,0 +1,207 @@
+logging {
+  level = sys.env("LOG_LEVEL")
+}
+
+// Default configurations for the agent to monitor itself
+prometheus.exporter.self "integrations_alloy" { }
+
+remotecfg {
+        url            = "https://fleet-management-prod-001.grafana.net"
+        id             = "71d025a17cf6"
+        poll_frequency = "60s"
+
+        basic_auth {
+                username = sys.env("GC_ALLOY_USERNAME")
+                password = sys.env("GC_ALLOY_TOKEN")
+        }
+}
+
+discovery.relabel "integrations_alloy" {
+  targets = prometheus.exporter.self.integrations_alloy.targets
+ 
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+ 
+  rule {
+    target_label = "alloy_hostname"
+    replacement  = constants.hostname
+  }
+ 
+  rule {
+    target_label = "job"
+    replacement  = "integrations/alloy-check"
+  }
+}
+ 
+prometheus.scrape "integrations_alloy" {
+  targets    = discovery.relabel.integrations_alloy.output
+  forward_to = [prometheus.relabel.integrations_alloy.receiver]  
+ 
+  scrape_interval = "60s"
+}
+ 
+prometheus.relabel "integrations_alloy" {
+  forward_to = [prometheus.remote_write.metrics_service.receiver]
+ 
+  rule {
+    source_labels = ["__name__"]
+    regex         = "(prometheus_target_sync_length_seconds_sum|prometheus_target_scrapes_.*|prometheus_target_interval.*|prometheus_sd_discovered_targets|alloy_build.*|prometheus_remote_write_wal_samples_appended_total|process_start_time_seconds)"
+    action        = "keep"
+  }
+}
+ 
+// This is where we configure sending data to the grafana_cloud instances
+ 
+// METRICS
+prometheus.remote_write "metrics_service" {
+  endpoint {
+    url = sys.env("GC_METRIC_ENDPOINT")
+ 
+    basic_auth {
+      username = sys.env("GC_METRIC_USERNAME")
+      password = sys.env("GC_METRIC_TOKEN")
+    }
+  }
+}
+ 
+// LOGS
+loki.write "logs_service" {
+  endpoint {
+    url = sys.env("GC_LOG_ENDPOINT")
+
+    basic_auth {
+      username = sys.env("GC_LOG_USERNAME")
+      password = sys.env("GC_LOG_TOKEN")
+    }
+  }
+}
+ 
+// TRACES
+otelcol.exporter.otlp "grafana_cloud_tempo" {
+  // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.exporter.otlp/
+  client {
+    endpoint = sys.env("GC_TRACE_ENDPOINT")
+    auth     = otelcol.auth.basic.grafana_cloud_tempo.handler
+  }
+}
+ 
+otelcol.auth.basic "grafana_cloud_tempo" {
+  // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.auth.basic/
+  username = sys.env("GC_TRACE_USERNAME")
+  password = sys.env("GC_TRACE_TOKEN")
+}
+
+
+// OTEL
+otelcol.receiver.otlp "default" {
+  // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.receiver.otlp/
+
+  // configures the default grpc endpoint "0.0.0.0:4317"
+  grpc { }
+  // configures the default http/protobuf endpoint "0.0.0.0:4318"
+  http { }
+
+  output {
+    metrics = [otelcol.processor.resourcedetection.default.input]
+    logs    = [otelcol.processor.resourcedetection.default.input]
+    traces  = [otelcol.processor.resourcedetection.default.input]
+  }
+}
+
+otelcol.processor.resourcedetection "default" {
+  // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.processor.resourcedetection/
+  detectors = ["env", "system"] // add "gcp", "ec2", "ecs", "elastic_beanstalk", "eks", "lambda", "azure", "aks", "consul", "heroku"  if you want to use cloud resource detection
+
+  system {
+    hostname_sources = ["os"]
+  }
+
+  output {
+    metrics = [otelcol.processor.transform.add_resource_attributes_as_metric_attributes.input]
+    logs    = [otelcol.processor.batch.default.input]
+    traces  = [
+      otelcol.processor.batch.default.input,
+      otelcol.connector.host_info.default.input,
+    ]
+  }
+}
+
+otelcol.connector.host_info "default" {
+  // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.connector.host_info/
+  host_identifiers = ["host.name"]
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.transform "add_resource_attributes_as_metric_attributes" {
+  // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.processor.transform/
+  error_mode = "ignore"
+
+  metric_statements {
+    context    = "datapoint"
+    statements = [
+      "set(attributes[\"deployment.environment\"], resource.attributes[\"deployment.environment\"])",
+      "set(attributes[\"service.version\"], resource.attributes[\"service.version\"])",
+    ]
+  }
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.processor.batch/
+  output {
+    metrics = [otelcol.exporter.prometheus.grafana_cloud_prometheus.input]
+    logs    = [otelcol.exporter.loki.grafana_cloud_loki.input]
+    traces  = [otelcol.exporter.otlp.grafana_cloud_tempo.input]
+  }
+}
+
+// These forward to our existing defined logs and metrics services
+otelcol.exporter.loki "grafana_cloud_loki" {
+  // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.exporter.loki/
+  forward_to = [loki.write.logs_service.receiver]
+}
+
+otelcol.exporter.prometheus "grafana_cloud_prometheus" {
+  // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.exporter.prometheus/
+  add_metric_suffixes = false
+  forward_to          = [prometheus.remote_write.metrics_service.receiver]
+}
+
+// prometheus.exporter.postgres "demo_postgres" {
+//   //   data_source_names = ["postgresql://username:password@localhost:5432/database_name?sslmode=disable"]
+//     data_source_names = ["postgresql://demouser:password@postgres:5432/demo?sslmode=disable"]
+// }
+
+// prometheus.scrape "demo_postgres_scrape" {
+//   targets    = prometheus.exporter.postgres.demo_postgres.targets
+//   forward_to = [prometheus.remote_write.metrics_service.receiver]
+// }
+prometheus.scrape "sonarqube_metrics" {
+    targets = [
+        {"__address__" = "sonarqube:9000"},
+    ]
+
+    metrics_path = "/api/prometheus/metrics"
+    
+    // Optional: Basic authentication if required
+    basic_auth {
+        username = "admin"
+        password = sys.env("SONARQUBE_PASSWORD")
+    }
+
+    // Optional: Token authentication
+    // authorization {
+    //     type = "Bearer"
+    //     credentials = sys.env("SONARQUBE_BEARER_TOKEN")
+    // }
+
+    forward_to = [prometheus.remote_write.metrics_service.receiver]
+}
