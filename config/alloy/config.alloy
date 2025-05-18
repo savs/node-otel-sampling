@@ -2,6 +2,10 @@ logging {
   level = sys.env("LOG_LEVEL")
 }
 
+livedebugging {
+  enabled = true
+}
+
 // Default configurations for the agent to monitor itself
 prometheus.exporter.self "integrations_alloy" { }
 
@@ -106,7 +110,8 @@ otelcol.receiver.otlp "default" {
   output {
     metrics = [otelcol.processor.resourcedetection.default.input]
     logs    = [otelcol.processor.resourcedetection.default.input]
-    traces  = [otelcol.processor.resourcedetection.default.input]
+    // traces  = [otelcol.processor.resourcedetection.default.input]
+    traces  = [otelcol.connector.spanmetrics.default.input,otelcol.processor.resourcedetection.default.input]
   }
 }
 
@@ -136,6 +141,35 @@ otelcol.connector.host_info "default" {
     metrics = [otelcol.processor.batch.default.input]
   }
 }
+
+otelcol.connector.spanmetrics "default" {
+  dimension {
+    name = "http.method"
+    default = "GET"
+  }
+
+  dimension {
+    name = "http.target"
+  }
+
+  aggregation_temporality = "DELTA"
+
+  histogram {
+    explicit {
+      buckets = ["50ms", "100ms", "250ms", "1s", "5s", "10s"]
+    }
+  }
+
+  metrics_flush_interval = "15s"
+
+  namespace = "traces_spanmetrics"
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+  }
+
+}
+
 
 otelcol.processor.transform "add_resource_attributes_as_metric_attributes" {
   // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.processor.transform/
@@ -173,35 +207,4 @@ otelcol.exporter.prometheus "grafana_cloud_prometheus" {
   // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.exporter.prometheus/
   add_metric_suffixes = false
   forward_to          = [prometheus.remote_write.metrics_service.receiver]
-}
-
-// prometheus.exporter.postgres "demo_postgres" {
-//   //   data_source_names = ["postgresql://username:password@localhost:5432/database_name?sslmode=disable"]
-//     data_source_names = ["postgresql://demouser:password@postgres:5432/demo?sslmode=disable"]
-// }
-
-// prometheus.scrape "demo_postgres_scrape" {
-//   targets    = prometheus.exporter.postgres.demo_postgres.targets
-//   forward_to = [prometheus.remote_write.metrics_service.receiver]
-// }
-prometheus.scrape "sonarqube_metrics" {
-    targets = [
-        {"__address__" = "sonarqube:9000"},
-    ]
-
-    metrics_path = "/api/prometheus/metrics"
-    
-    // Optional: Basic authentication if required
-    basic_auth {
-        username = "admin"
-        password = sys.env("SONARQUBE_PASSWORD")
-    }
-
-    // Optional: Token authentication
-    // authorization {
-    //     type = "Bearer"
-    //     credentials = sys.env("SONARQUBE_BEARER_TOKEN")
-    // }
-
-    forward_to = [prometheus.remote_write.metrics_service.receiver]
 }
