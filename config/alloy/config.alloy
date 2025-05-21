@@ -110,8 +110,10 @@ otelcol.receiver.otlp "default" {
   output {
     metrics = [otelcol.processor.resourcedetection.default.input]
     logs    = [otelcol.processor.resourcedetection.default.input]
-    // traces  = [otelcol.processor.resourcedetection.default.input]
-    traces  = [otelcol.connector.spanmetrics.default.input,otelcol.processor.resourcedetection.default.input]
+    traces  = [
+      otelcol.connector.spanmetrics.tracemetrics.input,
+      otelcol.processor.resourcedetection.default.input,
+    ]
   }
 }
 
@@ -142,7 +144,11 @@ otelcol.connector.host_info "default" {
   }
 }
 
-otelcol.connector.spanmetrics "default" {
+// https://github.com/grafana/intro-to-mltp/blob/main/alloy/config.alloy#L361
+otelcol.connector.spanmetrics "tracemetrics" {
+
+  namespace = "traces.spanmetrics"
+
   dimension {
     name = "http.method"
     default = "GET"
@@ -152,20 +158,26 @@ otelcol.connector.spanmetrics "default" {
     name = "http.target"
   }
 
-  aggregation_temporality = "DELTA"
+  dimension {
+    name = "http.status_code"
+  }
+
+  dimension {
+    name = "service.version"
+  }
 
   histogram {
     explicit {
-      buckets = ["50ms", "100ms", "250ms", "1s", "5s", "10s"]
     }
   }
-
-  metrics_flush_interval = "15s"
-
-  namespace = "traces_spanmetrics"
+  
+  exemplars {
+    enabled = true
+  }
 
   output {
-    metrics = [otelcol.processor.batch.default.input]
+    // metrics = [otelcol.exporter.otlphttp.grafana_cloud.input]
+    metrics = [otelcol.exporter.prometheus.tracemetrics.input]
   }
 
 }
@@ -180,6 +192,7 @@ otelcol.processor.transform "add_resource_attributes_as_metric_attributes" {
     statements = [
       "set(attributes[\"deployment.environment\"], resource.attributes[\"deployment.environment\"])",
       "set(attributes[\"service.version\"], resource.attributes[\"service.version\"])",
+      "set(attributes[\"service.name\"], resource.attributes[\"service.name\"])",
     ]
   }
 
@@ -197,10 +210,26 @@ otelcol.processor.batch "default" {
   }
 }
 
+otelcol.exporter.otlphttp "grafana_cloud" {
+  client {
+    endpoint = sys.env("OTEL_EXPORTER_OTLP_ENDPOINT")
+    auth = otelcol.auth.basic.grafana_cloud.handler
+  }
+}
+
+otelcol.auth.basic "grafana_cloud" {
+  username = sys.env("GC_OTEL_USERNAME")
+  password = sys.env("GC_OTEL_TOKEN")
+}
+
 // These forward to our existing defined logs and metrics services
 otelcol.exporter.loki "grafana_cloud_loki" {
   // https://grafana.com/docs/agent/latest/flow/reference/components/otelcol.exporter.loki/
   forward_to = [loki.write.logs_service.receiver]
+}
+
+otelcol.exporter.prometheus "tracemetrics" {
+  forward_to          = [prometheus.remote_write.metrics_service.receiver]
 }
 
 otelcol.exporter.prometheus "grafana_cloud_prometheus" {
