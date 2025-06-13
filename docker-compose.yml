@@ -12,8 +12,8 @@ services:
       - alloy
   alloy:
     container_name: alloy
-    image: grafana/alloy:v1.8.1
-    # image: grafana/alloy:latest
+    # image: grafana/alloy:v1.8.1
+    image: grafana/alloy:latest
     volumes:
       - ./config/alloy:/etc/alloy
     command:
