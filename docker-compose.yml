@@ -21,7 +21,7 @@ services:
       - /etc/alloy/config.alloy
       - --storage.path=/var/lib/alloy/data
       - --server.http.listen-addr=0.0.0.0:12345
-      - --stability.level=experimental # Enable all functionality
+      # - --stability.level=experimental # Enable all functionality
     env_file:
       - .env
     ports:
